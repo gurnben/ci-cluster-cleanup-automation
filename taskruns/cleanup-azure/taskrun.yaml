@@ -1,0 +1,15 @@
+apiVersion: tekton.dev/v1beta1
+kind: TaskRun
+metadata:
+  name: cleanup-jobs-taskrun
+  namespace: cleanup-jobs
+spec:
+  taskRef:
+    name: cleanup-azure
+  params:
+  - name: exclusions
+    value: ''
+  serviceAccountName: cleanup-job-sa
+  workspaces:
+  - name: azure-dir
+    emptyDir: {}

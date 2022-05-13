@@ -1,0 +1,67 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: list-running-builds
+  namespace: cleanup-jobs
+spec:
+  description: |
+    Lists the build IDs of running CI builds in TravisCI
+    given the Repo ID of a GitHub Repo. 
+    List is in regex form, to be used as a filter in grep.
+  params:
+    - name: repo-id
+      type: string
+      description: The TravisCI ID for the GitHub Repo
+    - name: travis-token-secret
+      type: string
+      description: A secret containing a TRAVIS_TOKEN for TravisCI API access.
+      default: travis-token
+  results:    
+    - name: running-builds
+      description: List of running builds in Regex format, for use in grep
+    - name: running-builds-azure
+      description: List of running build ids with the last character stripped in Regex format, for use in grep
+  steps:
+    - name: list-running-builds
+      image: quay.io/gurnben/cloudclisbase:latest
+      env:
+        - name: TRAVIS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: $(params.travis-token-secret)
+              key: TRAVIS_TOKEN
+      script: |
+        # List the 25 most recent builds on the canary repo on TravisCI
+        # NOTE: We're assuming that if we have any running builds, they'll
+        # be in the most recent 25 builds.  
+        builds=$(curl --silent \
+            -H "travis-API-Version: 3" \
+            -H "User-Agent: API Explorer" \
+            -H "Authorization: token $TRAVIS_TOKEN" \
+            https://api.travis-ci.com/repo/$(params.repo-id)/builds)
+
+        # Filter for only running builds
+        running_builds=($(echo "$builds" | \
+            jq '.builds[] | select(.state == "started") | .id'))
+
+        # Print intermediate data for debug.
+        echo "Found the following running builds:"
+        echo ${running_builds[*]}
+
+        # Empty excluded builds as default
+        excluded_builds=""
+        excluded_builds_azure=""
+        # Iteratively build a regex expression to exclude all builds in running_builds
+        if [[ ${#running_builds[@]} -ge 1 ]]; then
+            first_build="${running_builds[0]}"
+            excluded_builds="$first_build"
+            excluded_builds_azure="${first_build%?}"
+            for build in "${running_builds[@]:1}"; do
+                excluded_builds="$excluded_builds\|$build"
+                excluded_builds_azure="$excluded_builds_azure\|${build%?}"
+            done
+        fi
+
+        # Write out results
+        echo -n $excluded_builds > $(results.running-builds.path)
+        echo -n $excluded_builds_azure > $(results.running-builds-azure.path)

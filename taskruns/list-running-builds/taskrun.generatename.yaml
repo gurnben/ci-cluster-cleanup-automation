@@ -1,0 +1,12 @@
+apiVersion: tekton.dev/v1beta1
+kind: TaskRun
+metadata:
+  generateName: list-running-builds-taskrun-
+  namespace: cleanup-jobs
+spec:
+  taskRef:
+    name: list-running-builds
+  params:
+  - name: repo-id
+    value: "13510528"
+  serviceAccountName: cleanup-job-sa

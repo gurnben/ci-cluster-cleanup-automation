@@ -1,0 +1,84 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: cleanup-azure
+  namespace: cleanup-jobs
+spec:
+  description: |
+    Clean up resources on an Azure account given
+    a grep-friendly string of items to exclude.  
+  params:
+    - name: exclusions
+      type: string
+      description: A grep-style string to exclude from cleanup.
+      default: ""
+    - name: azure-credentials-secret
+      type: string
+      description: A secret containing Azure account details & credentials
+      default: azure-credentials
+  steps:
+    - name: list-running-builds
+      image: quay.io/gurnben/cloudclisbase:latest
+      env:
+        - name: AZURE_SUBSCRIPTION_ID
+          valueFrom:
+            secretKeyRef:
+              name: $(params.azure-credentials-secret)
+              key: AZURE_SUBSCRIPTION_ID
+        - name: AZURE_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: $(params.azure-credentials-secret)
+              key: AZURE_CLIENT_ID
+        - name: AZURE_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: $(params.azure-credentials-secret)
+              key: AZURE_CLIENT_SECRET
+        - name: AZURE_TENANT_ID
+          valueFrom:
+            secretKeyRef:
+              name: $(params.azure-credentials-secret)
+              key: AZURE_TENANT_ID
+      script: |
+        # Set our working directory to a workspace where we can read/write
+        export HOME=$(workspaces.azure-dir.path)
+
+        # Log in to the az cli and target the correct project.
+        az login --service-principal \
+          -u "$AZURE_CLIENT_ID" \
+          -p "$AZURE_CLIENT_SECRET" \
+          -t "$AZURE_TENANT_ID"
+
+        # Set the Azure subscription to the input ID
+        az account set --subscription=$AZURE_SUBSCRIPTION_ID
+
+        # Prepare the Azure osServicePrinciple file
+        echo "{"subscriptionId":"$AZURE_SUBSCRIPTION_ID","clientId":"$AZURE_CLIENT_ID","clientSecret":"$AZURE_CLIENT_SECRET","tenantId":"$AZURE_TENANT_ID"}" > $HOME/.azure/osServicePrincipal.json
+
+        # Produce a list of resources to be cleaned up.
+        # If the exclusions list is empty, skip filtering.
+        clusters=""
+        if [[ "$(params.exclusions)" ]]; then
+          clusters=($(az group list \
+            | jq -r '.[].name' \
+            | grep "azure-ginkgo" \
+            | grep -v "$(params.exclusions)" \
+            | sed "s/-rg//g"))
+        else
+          clusters=($(az group list \
+            | jq -r '.[].name' \
+            | grep "azure-ginkgo" \
+            | sed "s/-rg//g"))
+        fi
+
+        echo "Cleaning up the following clusters:"
+        echo "${clusters[*]}"
+
+        for cluster in ${clusters[*]}; do
+          hiveutil deprovision azure $cluster
+        done
+  workspaces:
+  - name: azure-dir
+    description: A directory to hold ephemeral artifacts like the .azure diretory
+    mountPath: /tmphome
